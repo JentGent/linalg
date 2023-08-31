@@ -20,6 +20,83 @@ class Mat {
     get square() { return this.rows === this.cols; }
 
     /**
+     * Calculates whether or not the columns of the matrix are orthogonal (NOT unitary)
+     * @param {number} tol - How close the dot product must be to 0
+     * @returns {boolean} `true` if orthogonal
+     */
+    colsOrthogonal(tol = 0.00001) {
+        for(let col1 = 0; col1 < this.cols - 1; col1 += 1) {
+            for(let col2 = col1 + 1; col2 < this.cols; col2 += 1) {
+                let dotProduct = 0;
+                for(let row = 0; row < this.rows; row += 1)
+                    dotProduct += this.arr[row][col1] * this.arr[row][col2];
+                if(dotProduct > tol || dotProduct < -tol) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Calculates whether or not the magnitudes of all the columns are 1
+     * @param {number} tol - How close the dot product must be to 1
+     * @returns {boolean} `true` if unitary
+     */
+    colsUnitary(tol = 0.00001) {
+        for(let col = 0; col < this.cols; col += 1) {
+            let dotProduct = 0;
+            for(let row = 0; row < this.rows; row += 1) {
+                dotProduct += this.arr[row][col] * this.arr[row][col];
+                if(dotProduct > 1 + tol) return false;
+            }
+            if(dotProduct < 1 - tol) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Adds another matrix in place
+     * @param {Mat} m - Addend
+     * @returns {Mat} The matrix after adding
+     */
+    add(m) {
+        if(!(m instanceof Mat)) throw new TypeError("Argument must be a matrix");
+        if(this.rows !== m.rows || this.cols !== m.cols) throw new Error("Matrices must have same shape");
+        for(let row = 0; row < this.rows; row += 1) {
+            for(let col = 0; col < this.cols; col += 1)
+                this.arr[row][col] += m.arr[row][col];
+        }
+        return this;
+    }
+
+    /**
+     * Subtracts another matrix in place
+     * @param {Mat} m - Subtrahend
+     * @returns {Mat} The matrix after subtracting
+     */
+    sub(m) {
+        if(!(m instanceof Mat)) throw new TypeError("Argument must be a matrix");
+        if(this.rows !== m.rows || this.cols !== m.cols) throw new Error("Matrices must have same shape");
+        for(let row = 0; row < this.rows; row += 1) {
+            for(let col = 0; col < this.cols; col += 1)
+                this.arr[row][col] -= m.arr[row][col];
+        }
+        return this;
+    }
+
+    /**
+     * Multiplies all the values in the matrix by a number
+     * @param {Mat} s - Scalar
+     * @returns {Mat} The matrix after scaling
+     */
+    scale(s) {
+        for(let row = 0; row < this.rows; row += 1) {
+            for(let col = 0; col < this.cols; col += 1)
+                this.arr[row][col] *= s;
+        }
+        return this;
+    }
+
+    /**
      * Swaps two rows/columns in place
      * @param {number} i - Index of row/column to swap
      * @param {number} j - Index of row/column to swap
@@ -46,7 +123,7 @@ class Mat {
      * @param {number} zero - Optionally, the threshold for stopping division by zero
      * @returns {Mat} The matrix in reduced row-echelon form
      */
-    reduce(zero = 0.0001) {
+    reduce(zero = 0) {
         let row = 0, col = 0;
         while(row < this.rows && col < this.cols) {
             // Find `maxRow` with highest value in `col`
@@ -204,7 +281,7 @@ class Mat {
      * Mat.mul(A, x) == B
      * ```
      */
-    static PLU(m, zero = 0.0001) {
+    static PLU(m, zero = 0) {
         const P = [];
         for(let i = 0; i < m.rows; i += 1)
             P[i] = i;
@@ -383,6 +460,37 @@ class Mat {
         return reduced.slice(0, coeffs.cols, reduced.cols - constants.cols);
     }
 
+    static householder(normal) {
+        if(!(normal instanceof Mat)) throw new TypeError("Argument must be a matrix");
+        return Mat.identity(normal.rows, normal.rows).sub(Mat.mul(normal, Mat.T(normal)).scale(2));
+    }
+
+    static QR(m) {
+        let QT = Mat.identity(m.rows), R = Mat.copy(m);
+        for(let col = 0; col < Math.min(m.rows, m.cols); col += 1) {
+            let r = 0;
+            for(let row = col; row < m.rows; row += 1)
+                r += R.arr[row][col] * R.arr[row][col];
+            r = Math.sqrt(r);
+            const target = [...Array(m.rows)].fill(0);
+            for(let row = 0; row < col; row += 1)
+                target[row] = R.arr[row][col];
+            target[col] = r;
+            let tr = 0;
+            for(let row = 0; row < m.rows; row += 1) {
+                target[row] -= R.arr[row][col];
+                tr += target[row] * target[row];
+            }
+            const reflect = Mat.householder(new Mat(target).scale(1 / Math.sqrt(tr)));
+            R = Mat.mul(reflect, R);
+            R.arr[col][col] = r;
+            for(let row = col + 1; row < m.rows; row += 1)
+                R.arr[row][col] = 0;
+            QT = Mat.mul(reflect, QT);
+        }
+        return [Mat.T(QT), R];
+    }
+
     /**
      * Returns `true` if the following is element-wise true for all values in `m1` and `m2`: `|a-b|<=atol+rtol*|b|`
      * 
@@ -449,24 +557,35 @@ class Mat {
 
     /**
      * Creates a new matrix by filling a matrix of the given dimensions with random values between a given range
-     * @param {number} m - Number of rows
-     * @param {number} n - Number of columns
+     * @param {number} rows - Number of rows
+     * @param {number} cols - Number of columns
      * @param {number} min - Minimum value (defaults `-1`)
      * @param {number} max - Maximum value (defaults `1`)
      * @returns {Mat} An `m`x`n` matrix of random numbers between `min` and `max`
      */
-    static rand(m, n, min = -1, max = 1) {
-        return new Mat([...Array(m)].map(row => [...Array(n)].map(col => Math.random() * (max - min) + min)));
+    static rand(rows, cols = rows, min = -1, max = 1) {
+        return new Mat([...Array(rows)].map(row => [...Array(cols)].map(col => Math.random() * (max - min) + min)));
     }
 
     /**
      * Creates a new matrix by filling a matrix of the given dimensions with `1`s along the principal diagonal and `0`s everywhere else
-     * @param {number} m - Dimensions of the matrix
-     * @param {number} n - Optionally, some other number of columns; if different from `m`, this won't be an identity matrix
+     * @param {number} rows - Dimensions of the matrix
+     * @param {number} cols - Optionally, some other number of columns; if different from `m`, this won't be an identity matrix
      * @returns {Mat} Matrix with `1`s along diagonal and `0`s everywhere else
      */
-    static identity(m, n = m) {
-        return new Mat([...Array(m)].map((row, i) => [...Array(n)].map((col, j) => i === j ? 1 : 0)));
+    static identity(rows, cols = rows) {
+        return new Mat([...Array(rows)].map((row, i) => [...Array(cols)].map((col, j) => i === j ? 1 : 0)));
+    }
+
+    /**
+     * Creates a new matrix by filling a matrix of the given dimensions with a given value
+     * @param {number} rows - Number of rows
+     * @param {number} cols - Number of columns
+     * @param {number} value - Value to fill the matrix with
+     * @returns {Mat} Matrix filled with the given value
+     */
+    static fill(rows, cols = rows, value = 0) {
+        return new Mat([...Array(rows)].map(row => Array(cols).fill(value)));
     }
 
     /**
