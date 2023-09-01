@@ -24,13 +24,13 @@ class Mat {
      * @param {number} tol - How close the dot product must be to 0
      * @returns {boolean} `true` if orthogonal
      */
-    colsOrthogonal(tol = 0.00001) {
+    colsPerp(tol = 0.00001) {
         for(let col1 = 0; col1 < this.cols - 1; col1 += 1) {
             for(let col2 = col1 + 1; col2 < this.cols; col2 += 1) {
                 let dotProduct = 0;
                 for(let row = 0; row < this.rows; row += 1)
                     dotProduct += this.arr[row][col1] * this.arr[row][col2];
-                if(dotProduct > tol || dotProduct < -tol) return false;
+                if(!(dotProduct <= tol && dotProduct >= -tol)) return false;
             }
         }
         return true;
@@ -41,14 +41,14 @@ class Mat {
      * @param {number} tol - How close the dot product must be to 1
      * @returns {boolean} `true` if unitary
      */
-    colsUnitary(tol = 0.00001) {
+    colsUnit(tol = 0.00001) {
         for(let col = 0; col < this.cols; col += 1) {
             let dotProduct = 0;
             for(let row = 0; row < this.rows; row += 1) {
                 dotProduct += this.arr[row][col] * this.arr[row][col];
-                if(dotProduct > 1 + tol) return false;
+                if(!(dotProduct <= 1 + tol)) return false;
             }
-            if(dotProduct < 1 - tol) return false;
+            if(!(dotProduct >= 1 - tol)) return false;
         }
         return true;
     }
@@ -205,6 +205,35 @@ class Mat {
     }
 
     /**
+     * Transposes an AxB matirx into a BxA matrix in place
+     * @returns {Mat} The matrix after transposing
+     */
+    T() {
+        [this.rows, this.cols] = [this.cols, this.rows];
+        const square = Math.min(this.rows, this.cols);
+        for(let row = 0; row < square; row += 1)
+            for(let col = row + 1; col < square; col += 1)
+                [this.arr[row][col], this.arr[col][row]] = [this.arr[col][row], this.arr[row][col]];
+        if(this.rows !== this.cols) {
+            if(this.rows > this.cols) {
+                for(let row = square; row < this.rows; row += 1) {
+                    this.arr[row] = [];
+                    for(let col = 0; col < this.cols; col += 1)
+                        this.arr[row][col] = this.arr[col][row];
+                }
+            }
+            else if(this.row < this.cols)
+                for(let row = 0; row < this.rows; row += 1)
+                    for(let col = square; col < this.cols; col += 1)
+                        this.arr[row][col] = this.arr[col][row];
+            this.arr.length = this.rows;
+            for(let row = 0; row < this.rows; row += 1)
+                this.arr[row].length = this.cols;
+        }
+        return this;
+    }
+
+    /**
      * Creates a new matrix with the same shape and values
      * @param {Mat} m - The matrix to copy
      * @returns {Mat} The duplicate matrix
@@ -329,7 +358,7 @@ class Mat {
      * Creates two new matrices by separating a combined LU matrix (result of `Mat.PLU()`) into a lower and upper triangular matrix
      * @param {Mat} LU - The combined L+U matrix
      * @param {0 | 1} uni - Optionally, specifies whether the lower (0) or upper (1) matrix is unitriangular
-     * @returns {Array<Mat, Mat>} The separated L and U matrices
+     * @returns {[Mat, Mat]} The separated L and U matrices
      */
     static separateLU(LU, uni = 0) {
         const L = [], U = [];
@@ -460,35 +489,81 @@ class Mat {
         return reduced.slice(0, coeffs.cols, reduced.cols - constants.cols);
     }
 
+    /**
+     * Creates a new matrix by calculating the Householder matrix that reflects matrices across the hyperplane that contains the origin and has a normal equal to the given normal vector
+     * @param {Mat} normal - The normal of the hyperplane of reflection. This must be normalized before calling
+     * @returns {Mat} The reflection matrix
+     * @example
+     * To reflect a matrix M across the reflection hyperplane with normal N:
+     * ```
+     * Mat.mul(householder(N), M)
+     * ```
+     */
     static householder(normal) {
         if(!(normal instanceof Mat)) throw new TypeError("Argument must be a matrix");
         return Mat.identity(normal.rows, normal.rows).sub(Mat.mul(normal, Mat.T(normal)).scale(2));
     }
-
+    
+    /**
+     * Creates a new matrix by calculating the QR decomposition of the given matrix with Householder transformations
+     * 
+     * Q will be an orthogonal matrix, and A will be an upper triangular matrix
+     * @param {Mat} m - The matrix to factor
+     * @returns {[Mat, Mat]} Q and R
+     * @example
+     * ```
+     * [q, r] = Mat.QR(A)
+     * Mat.mul(q, r) == A
+     * ```
+     */
     static QR(m) {
         let QT = Mat.identity(m.rows), R = Mat.copy(m);
-        for(let col = 0; col < Math.min(m.rows, m.cols); col += 1) {
+        // For each column C in R, reflect Q and R such that column C has zeros below C, while maintaining the first (C-1) values and conserving the magnitude of column C
+        for(let col = 0; col < Math.min(m.rows, m.cols) - (m.rows > m.cols ? 0 : 1); col += 1) {
+            // Magnitude of column C
             let r = 0;
             for(let row = col; row < m.rows; row += 1)
                 r += R.arr[row][col] * R.arr[row][col];
             r = Math.sqrt(r);
-            const target = [...Array(m.rows)].fill(0);
-            for(let row = 0; row < col; row += 1)
-                target[row] = R.arr[row][col];
-            target[col] = r;
-            let tr = 0;
-            for(let row = 0; row < m.rows; row += 1) {
-                target[row] -= R.arr[row][col];
-                tr += target[row] * target[row];
+
+            // Normalized vector from C to target vector (normal of plane of reflection)
+            const vector = [];
+            vector[0] = r - R.arr[col][col];
+            let tr = vector[0] * vector[0];
+            for(let row = 1; row < m.rows - col; row += 1) {
+                vector[row] = -R.arr[row + col][col];
+                tr += vector[row] * vector[row];
             }
-            const reflect = Mat.householder(new Mat(target).scale(1 / Math.sqrt(tr)));
-            R = Mat.mul(reflect, R);
+            tr = 1 / Math.sqrt(tr);
+            for(let i = 0; i < vector.length; i += 1)
+                vector[i] *= tr;
+
+            // Set column C to target vector
             R.arr[col][col] = r;
-            for(let row = col + 1; row < m.rows; row += 1)
+            for(let row = col + 1; row < R.rows; row += 1)
                 R.arr[row][col] = 0;
-            QT = Mat.mul(reflect, QT);
+
+            // Reflect column vectors in R (only need to reflect the columns to the right of C, since the first C columns already lie on the plane of reflection)
+            for(let col2 = col + 1; col2 < R.cols; col2 += 1) {
+                let dotProduct = 0;
+                for(let row = 0; row < vector.length; row += 1)
+                    dotProduct += vector[row] * R.arr[row + col][col2];
+                dotProduct *= 2;
+                for(let row = 0; row < vector.length; row += 1)
+                    R.arr[row + col][col2] -= dotProduct * vector[row];
+            }
+
+            // Reflect column vectors
+            for(let col2 = 0; col2 < QT.cols; col2 += 1) {
+                let dotProduct = 0;
+                for(let row = 0; row < vector.length; row += 1)
+                    dotProduct += vector[row] * QT.arr[col2][row + col]; // Transposed for inverse
+                dotProduct *= 2;
+                for(let row = 0; row < vector.length; row += 1)
+                    QT.arr[col2][row + col] -= dotProduct * vector[row]; // Transposed for inverse
+            }
         }
-        return [Mat.T(QT), R];
+        return [QT, R];
     }
 
     /**
@@ -505,8 +580,8 @@ class Mat {
         if(!(m1 instanceof Mat) || !(m2 instanceof Mat)) throw new TypeError("Arguments must be matrices");
         if(m1.cols !== m2.cols || m1.rows !== m2.rows) throw new Error("Matrices must have same shape");
         for(let i = 0; i < m1.rows; i += 1) {
-            for(let j = 0; j < m2.rows; j += 1) {
-                if(Math.abs(m1.arr[i][j] - m2.arr[i][j]) > atol + rtol * Math.abs(m2.arr[i][j])) return false;
+            for(let j = 0; j < m1.cols; j += 1) {
+                if(!(Math.abs(m1.arr[i][j] - m2.arr[i][j]) <= atol + rtol * Math.abs(m2.arr[i][j]))) return false;
             }
         }
         return true;
